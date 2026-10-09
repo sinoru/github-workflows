@@ -1,0 +1,64 @@
+# Expands a package's short matrix spec into the full `include` list its build job takes whole
+# through `fromJSON`. The spec says which Swift minors and which target triples; catalog.json
+# says what each stands for, and matrix.jq joins the two. A caller looks like:
+#
+#   jobs:
+#     matrix:
+#       uses: sinoru/github-workflows/.github/workflows/matrix.yml@main
+#       with:
+#         swift: '["6.3", "6.4"]'
+#         targets: '["arm64-apple-macosx", "x86_64-unknown-linux-gnu"]'
+#     build:
+#       needs: matrix
+#       strategy:
+#         matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+#       runs-on: ${{ matrix.runner }}
+
+name: Matrix
+
+on:
+  workflow_call:
+    inputs:
+      swift:
+        description: JSON array of Swift minors, e.g. '["6.3", "6.4"]'.
+        type: string
+        required: true
+      targets:
+        description: >-
+          JSON array of target triples. An entry is a string, or an object with a `triple` key
+          and qualifiers; `swift` limits the row to those minors and every other key is passed
+          through into the row.
+        type: string
+        required: true
+    outputs:
+      matrix:
+        description: >-
+          The matrix, an object with an `include` list, for `strategy.matrix` through `fromJSON`.
+        value: ${{ jobs.matrix.outputs.matrix }}
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      # A reusable workflow runs in the caller's repository, so the catalog and the script
+      # have to be fetched from this one: the job context names the repository and commit
+      # the running workflow file came from, which is the ref the caller asked for.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+
+      - id: matrix
+        env:
+          SWIFT: ${{ inputs.swift }}
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          matrix=$(jq -c --argjson swift "$SWIFT" --argjson targets "$TARGETS" -f matrix.jq catalog.json)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          jq . <<< "$matrix"

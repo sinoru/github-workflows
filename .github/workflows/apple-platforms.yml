@@ -1,0 +1,87 @@
+# Builds a package for the Apple platforms it names, through the Xcode build system, and runs
+# its tests wherever a runner can boot the destination. Two axes, crossed: every Swift minor the
+# package supports, which moves the platform SDKs along with the compiler, under every target
+# triple it lists. A caller looks like:
+#
+#   jobs:
+#     apple-platforms:
+#       uses: sinoru/github-workflows/.github/workflows/apple-platforms.yml@main
+#       with:
+#         scheme: MyPackage
+#         swift: '["6.3", "6.4"]'
+#         targets: '["arm64-apple-macosx", "arm64-apple-ios", "arm64-apple-ios-simulator"]'
+#
+# Device and simulator are separate SDKs and target triples, so they fail independently. A
+# device row has nothing to run its tests on, so it stops after the build. A row may carry
+# qualifiers the build reads: `runtime` pins a simulator row to an OS release the image does
+# not carry; `scheme` and `arguments` build and test that row through another scheme, e.g. a
+# host app in a project, for tests that cannot run in the bare xctest runner.
+
+name: Apple Platforms
+
+on:
+  workflow_call:
+    inputs:
+      scheme:
+        description: The scheme to build and test.
+        type: string
+        required: true
+      swift:
+        description: JSON array of Swift minors, e.g. '["6.3", "6.4"]'.
+        type: string
+        required: true
+      targets:
+        description: JSON array of Apple target triples, with qualifiers where a row needs them.
+        type: string
+        required: true
+      configurations:
+        description: >-
+          Space-separated configurations to build and test. Release is the library as a client
+          gets it, so it is only left out where the tests cannot be built without testability.
+        type: string
+        default: Debug Release
+      release-only-suites:
+        description: >-
+          A pattern over suite type names. Suites it matches run in Release only and every
+          other suite in the other configurations only.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    uses: sinoru/github-workflows/.github/workflows/matrix.yml@main
+    with:
+      swift: ${{ inputs.swift }}
+      targets: ${{ inputs.targets }}
+
+  build:
+    needs: matrix
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    # Nothing here should take an hour; the alternative backstop is GitHub's 360-minute default,
+    # which a test that stops rather than fails would otherwise run out.
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: ${{ matrix.developer_dir }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: xcodebuild -version
+
+      - uses: sinoru/github-workflows/actions/xcodebuild-test@main
+        with:
+          scheme: ${{ matrix.scheme || inputs.scheme }}
+          arguments: ${{ matrix.arguments }}
+          configurations: ${{ inputs.configurations }}
+          release-only-suites: ${{ inputs.release-only-suites }}
+          destination: ${{ matrix.destination }}
+          test-destination: ${{ matrix.test_destination }}
+          simulator-runtime: ${{ matrix.simulator_runtime }}
+          simulator-sdk: ${{ matrix.simulator_sdk }}
+          download-platform: ${{ matrix.download_platform }}
+          download-version: ${{ matrix.download_version }}

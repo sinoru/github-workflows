@@ -1,0 +1,76 @@
+name: Resolve the xcodebuild test destination
+description: >-
+  Exports TEST_DESTINATION for xcodebuild to run tests on: the destination given directly, or a
+  simulator device picked out of the runtime named, after downloading that runtime if it is
+  pinned to a release the image does not carry. Exports nothing when given nothing, so a device
+  row's test step can condition on the variable and drop out.
+
+inputs:
+  destination:
+    description: >-
+      A destination xcodebuild can launch as is, e.g. "platform=macOS,arch=arm64,variant=macos".
+    default: ""
+  simulator-runtime:
+    description: >-
+      A CoreSimulator runtime identifier prefix, after "com.apple.CoreSimulator.SimRuntime.":
+      "iOS" for the runtime this Xcode ships, "iOS-16-4" to pin a release. visionOS is "xrOS".
+    default: ""
+  simulator-sdk:
+    description: >-
+      The simulator SDK whose version an unpinned runtime is matched to, e.g. "iphonesimulator".
+      Required with an unpinned `simulator-runtime`.
+    default: ""
+  download-platform:
+    description: >-
+      The platform name `xcodebuild -downloadPlatform` takes when the runtime is pinned, e.g.
+      "visionOS" (not "xrOS").
+    default: ""
+  download-version:
+    description: The release to download when the runtime is pinned, e.g. "16.4".
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Asking for a runtime that is installed downloads it again rather than returning, so this
+    # looks first: a pin that happens to match what the image ships then costs nothing. A
+    # version Apple has retired fails here, which is how a pin reports that it needs moving.
+    #
+    # No -architectureVariant: the arm64-only variant is published for recent runtimes only,
+    # and asking for one of an older release is refused as asking for a retired release is.
+    - name: Install the pinned simulator runtime
+      if: inputs.download-version != ''
+      shell: bash
+      run: |
+        if xcrun simctl list runtimes --json | jq -e \
+          --arg id "com.apple.CoreSimulator.SimRuntime.${{ inputs.simulator-runtime }}" \
+          '.runtimes[] | select(.identifier == $id)' >/dev/null; then
+          echo "${{ inputs.simulator-runtime }} is already installed."
+        else
+          xcodebuild -downloadPlatform "${{ inputs.download-platform }}" \
+            -buildVersion "${{ inputs.download-version }}"
+        fi
+
+    # A simulator row names a runtime and this picks a device out of it, because the image's
+    # device list turns over with every release and a hardcoded name would rot.
+    #
+    # A prefix without a version ("iOS") is held to the version of this Xcode's own simulator
+    # SDK (26.2 -> iOS-26-2): an image carries one runtime per Xcode it has, so the bare prefix
+    # could match another Xcode's. A pinned prefix ("iOS-16-4") already says which. jq fails
+    # the step rather than resolving to a null id if the runtime is missing.
+    - name: Resolve the test destination
+      shell: bash
+      run: |
+        runtime="${{ inputs.simulator-runtime }}"
+        if [ -n "$runtime" ]; then
+          case "$runtime" in
+            *-*) ;;
+            *) runtime="$runtime-$(xcrun --sdk "${{ inputs.simulator-sdk }}" --show-sdk-version | tr . -)" ;;
+          esac
+          udid=$(xcrun simctl list devices available --json | jq -er \
+            --arg prefix "com.apple.CoreSimulator.SimRuntime.$runtime" \
+            '[.devices | to_entries[] | select(.key | startswith($prefix)) | .value[]][0].udid')
+          echo "TEST_DESTINATION=id=$udid" >> "$GITHUB_ENV"
+        elif [ -n "${{ inputs.destination }}" ]; then
+          echo "TEST_DESTINATION=${{ inputs.destination }}" >> "$GITHUB_ENV"
+        fi

@@ -1,0 +1,171 @@
+{
+  "swift": {
+    "6.2": { "patch": "6.2.4", "xcode": "26.3", "macos_runner": "macos-26", "macos": "macOS 26" },
+    "6.3": { "patch": "6.3.3", "xcode": "26.6", "macos_runner": "macos-26", "macos": "macOS 26" },
+    "6.4": { "patch": "6.4.0", "xcode": "27.0", "macos_runner": "xcode-27", "macos": "macOS 27" }
+  },
+  "artifacts": {
+    "windows-x86_64": {
+      "url": "https://download.swift.org/swift-{patch}-release/windows10/swift-{patch}-RELEASE/swift-{patch}-RELEASE-windows10.exe",
+      "sha256": {
+        "6.3.3": "235626548f249cd516d3d4d90eee980dccad46f3822dac1f8e3119b0fede94b7",
+        "6.4.0": "76169a85bcba82854a0cd8f9655ffb74b3758d60c35a245457510095f2823c03"
+      }
+    },
+    "windows-arm64": {
+      "url": "https://download.swift.org/swift-{patch}-release/windows10-arm64/swift-{patch}-RELEASE/swift-{patch}-RELEASE-windows10-arm64.exe",
+      "sha256": {
+        "6.3.3": "09e39c60f0b05d00fbe5f55b2d344752ccbc86e64802a2d896c0d55bc51e243d",
+        "6.4.0": "f48e393634995cb589f547e40d64673bc641ca76b099697ba8227a8904be4a49"
+      }
+    },
+    "static-linux": {
+      "url": "https://download.swift.org/swift-{patch}-release/static-sdk/swift-{patch}-RELEASE/swift-{patch}-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz",
+      "sha256": {
+        "6.3.3": "87c3eaf908e67c0e13a84367119e12273cec1d2cd3d81f7d74bb36722d6b607b",
+        "6.4.0": "47d2fd89eebfdf9eb4d536b6710414297f755c17926cdebc4742c08982b40a9e"
+      }
+    },
+    "wasm": {
+      "url": "https://download.swift.org/swift-{patch}-release/wasm-sdk/swift-{patch}-RELEASE/swift-{patch}-RELEASE_wasm.artifactbundle.tar.gz",
+      "sha256": {
+        "6.3.3": "cabfa08b73bb8ac783927ecd15fa386e99d0c139c5f232445067bcf58379cae7",
+        "6.4.0": "f07b7be3c586d92d7a07051fc6d303b87ebea67eadc40640ba59d5a8b79aa86d"
+      }
+    },
+    "android": {
+      "url": "https://download.swift.org/swift-{patch}-release/android-sdk/swift-{patch}-RELEASE/swift-{patch}-RELEASE_android.artifactbundle.tar.gz",
+      "sha256": {
+        "6.3.3": "d160cc3206dd1886dae3fef2337af5e25ec034692cd0ec225721c56cc69da7f5",
+        "6.4.0": "21fb555122a3d801ad943d48df7ebffdd8824de61c25c180bb792d3edaee0b43"
+      }
+    }
+  },
+  "targets": {
+    "arm64-apple-macosx": {
+      "name": "macOS",
+      "host": "macos",
+      "destination": "generic/platform=macOS,variant=macos",
+      "test_destination": "platform=macOS,arch=arm64,variant=macos"
+    },
+    "arm64-apple-ios-macabi": {
+      "name": "Mac Catalyst",
+      "host": "macos",
+      "destination": "generic/platform=macOS,variant=Mac Catalyst",
+      "test_destination": "platform=macOS,arch=arm64,variant=Mac Catalyst"
+    },
+    "arm64-apple-ios": {
+      "name": "iOS",
+      "host": "macos",
+      "destination": "generic/platform=iOS"
+    },
+    "arm64-apple-ios-simulator": {
+      "name": "iOS Simulator",
+      "host": "macos",
+      "destination": "generic/platform=iOS Simulator",
+      "simulator_runtime": "iOS",
+      "simulator_sdk": "iphonesimulator",
+      "download_platform": "iOS"
+    },
+    "arm64-apple-tvos": {
+      "name": "tvOS",
+      "host": "macos",
+      "destination": "generic/platform=tvOS"
+    },
+    "arm64-apple-tvos-simulator": {
+      "name": "tvOS Simulator",
+      "host": "macos",
+      "destination": "generic/platform=tvOS Simulator",
+      "simulator_runtime": "tvOS",
+      "simulator_sdk": "appletvsimulator",
+      "download_platform": "tvOS"
+    },
+    "arm64_32-apple-watchos": {
+      "name": "watchOS",
+      "host": "macos",
+      "destination": "generic/platform=watchOS"
+    },
+    "arm64-apple-watchos-simulator": {
+      "name": "watchOS Simulator",
+      "host": "macos",
+      "destination": "generic/platform=watchOS Simulator",
+      "simulator_runtime": "watchOS",
+      "simulator_sdk": "watchsimulator",
+      "download_platform": "watchOS"
+    },
+    "arm64-apple-xros": {
+      "name": "visionOS",
+      "host": "macos",
+      "destination": "generic/platform=visionOS"
+    },
+    "arm64-apple-xros-simulator": {
+      "name": "visionOS Simulator",
+      "host": "macos",
+      "destination": "generic/platform=visionOS Simulator",
+      "simulator_runtime": "xrOS",
+      "simulator_sdk": "xrsimulator",
+      "download_platform": "visionOS"
+    },
+    "x86_64-apple-macosx": {
+      "name": "macOS Intel",
+      "host": "macos",
+      "runner": "macos-26-intel",
+      "os": "macOS 26"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "name": "Linux",
+      "runner": "ubuntu-24.04",
+      "os": "Ubuntu 24.04"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "name": "Linux arm64",
+      "runner": "ubuntu-24.04-arm",
+      "os": "Ubuntu 24.04"
+    },
+    "x86_64-unknown-windows-msvc": {
+      "name": "Windows",
+      "runner": "windows-2025",
+      "os": "Windows Server 2025",
+      "artifact": "windows-x86_64"
+    },
+    "aarch64-unknown-windows-msvc": {
+      "name": "Windows arm64",
+      "runner": "windows-11-arm",
+      "os": "Windows 11",
+      "artifact": "windows-arm64"
+    },
+    "x86_64-swift-linux-musl": {
+      "name": "Linux musl",
+      "runner": "ubuntu-24.04",
+      "os": "Linux",
+      "artifact": "static-linux",
+      "swift_sdk": true,
+      "skip_tests": true
+    },
+    "wasm32-unknown-wasip1": {
+      "name": "WebAssembly wasip1",
+      "runner": "ubuntu-24.04",
+      "os": "WebAssembly",
+      "artifact": "wasm",
+      "swift_sdk": true,
+      "test_options": "--disable-xctest"
+    },
+    "x86_64-unknown-linux-android28": {
+      "name": "Android API 28",
+      "runner": "ubuntu-24.04",
+      "os": "Android",
+      "artifact": "android",
+      "swift_sdk": true,
+      "android": true
+    },
+    "aarch64-unknown-linux-android28": {
+      "name": "Android API 28 arm64",
+      "runner": "ubuntu-24.04",
+      "os": "Android",
+      "artifact": "android",
+      "swift_sdk": true,
+      "android": true,
+      "skip_tests": true
+    }
+  }
+}

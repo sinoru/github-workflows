@@ -1,0 +1,38 @@
+name: Set up the Android emulator
+description: >-
+  Boots a headless emulator for the API level and architecture an Android Swift SDK triple
+  names, so that test binaries built against that SDK can be pushed to it and run. Puts adb on
+  the path for the steps that follow.
+
+inputs:
+  triple:
+    description: The Android Swift SDK triple, e.g. "x86_64-unknown-linux-android28".
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The API level and architecture are read off the triple, so the emulator matches whatever
+    # the SDK was built for. The runner's user is let at /dev/kvm so the emulator can use it,
+    # and the AVD is kept under RUNNER_TEMP rather than the home directory. Boot is waited on
+    # by polling the device's own property, up to five minutes.
+    - shell: bash
+      run: |
+        triple="${{ inputs.triple }}"
+        api="${triple##*android}"
+        arch="${triple%%-*}"
+        image="system-images;android-$api;default;$arch"
+        export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
+        echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+        yes | sdkmanager --licenses > /dev/null || true
+        sdkmanager --install emulator "$image"
+        export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+        mkdir -p "$ANDROID_AVD_HOME"
+        echo no | avdmanager create avd --force -n ci --package "$image"
+        nohup emulator -avd ci -cores "$(nproc)" -no-window -no-snapshot -noaudio -no-boot-anim -no-metrics -wipe-data -memory 4096 &
+        timeout 300 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = 1 ]; do sleep 5; done'

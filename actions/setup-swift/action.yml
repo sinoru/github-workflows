@@ -1,0 +1,122 @@
+name: Set up Swift
+description: >-
+  Installs the Swift toolchain a matrix row names: on Linux through swiftly, on Windows through
+  the official installer, on macOS by selecting an Xcode. Then installs the Swift SDK the row
+  needs, if any, and links the Android NDK into it when that SDK targets Android.
+
+inputs:
+  version:
+    description: The Swift version to install, as a full patch, e.g. "6.3.3".
+    required: true
+  developer-dir:
+    description: The Xcode to select on macOS, as a DEVELOPER_DIR path. Ignored elsewhere.
+    default: ""
+  artifact-url:
+    description: >-
+      What the row downloads: the installer on Windows, or the Swift SDK artifact bundle when
+      `swift-sdk` is set. Ignored otherwise.
+    default: ""
+  artifact-sha256:
+    description: The SHA-256 the artifact must hash to.
+    default: ""
+  swift-sdk:
+    description: >-
+      The target triple of a Swift SDK to install from the artifact, exported as SWIFT_SDK for
+      the steps that follow. Empty for none.
+    default: ""
+  android:
+    description: Whether the Swift SDK targets Android, which needs the NDK linked into it.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The runner keeps a minor-level symlink at the current patch (Xcode_26.6.app ->
+    # Xcode_26.6.1.app), which is what the catalog names, so this survives patch churn.
+    - name: Select Xcode
+      if: runner.os == 'macOS'
+      shell: bash
+      run: echo "DEVELOPER_DIR=${{ inputs.developer-dir }}" >> "$GITHUB_ENV"
+
+    # swiftly is fetched rather than taken from the image so that the same version of it is
+    # used everywhere. A toolchain's post-install script, when there is one, installs the
+    # system packages the toolchain needs, which takes root.
+    - name: Install Swift toolchain
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        curl -fL "https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz" -o "$RUNNER_TEMP/swiftly.tar.gz"
+        tar -C "$RUNNER_TEMP" -zxf "$RUNNER_TEMP/swiftly.tar.gz"
+        "$RUNNER_TEMP/swiftly" init ${RUNNER_DEBUG:+--verbose} --assume-yes --skip-install
+        . "$HOME/.local/share/swiftly/env.sh"
+        swiftly install --use "${{ inputs.version }}" --post-install-file "$RUNNER_TEMP/swiftly-post-install.sh"
+        if [ -f "$RUNNER_TEMP/swiftly-post-install.sh" ]; then
+          sudo apt-get update
+          sudo bash "$RUNNER_TEMP/swiftly-post-install.sh"
+        fi
+        echo "$SWIFTLY_BIN_DIR" >> "$GITHUB_PATH"
+
+    # The installer is checked against its catalog checksum before it is run, since it runs
+    # as whatever the runner is.
+    - name: Install Swift toolchain
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP "swift-installer.exe"
+        curl.exe -fL "${{ inputs.artifact-url }}" -o $installer
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $hash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash
+        if ($hash -ne "${{ inputs.artifact-sha256 }}") {
+          throw "The installer hashes to $hash."
+        }
+        $install = Start-Process -FilePath $installer -Wait -PassThru `
+          -ArgumentList "/quiet", "/norestart", "/log", "$env:RUNNER_TEMP\swift-installer.log"
+        exit $install.ExitCode
+
+    # The installer writes the toolchain's location into the registry for new processes, which
+    # a job's later steps are not: what it put there is read back and handed to them.
+    - name: Export the toolchain's environment
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $found = $false
+        foreach ($scope in "User", "Machine") {
+          foreach ($entry in [Environment]::GetEnvironmentVariable("Path", $scope) -split ";") {
+            if ($entry -like "*Swift*") {
+              Add-Content -Path $env:GITHUB_PATH -Value $entry
+              $found = $true
+            }
+          }
+          foreach ($name in "SDKROOT", "DEVELOPER_DIR") {
+            $value = [Environment]::GetEnvironmentVariable($name, $scope)
+            if ($value) {
+              Add-Content -Path $env:GITHUB_ENV -Value "$name=$value"
+            }
+          }
+        }
+        if (-not $found) {
+          Get-Content "$env:RUNNER_TEMP\swift-installer.log" -Tail 60 -ErrorAction SilentlyContinue
+          throw "The installer finished without putting the toolchain on the path."
+        }
+
+    # The SDK is named to the build steps by its triple rather than its bundle id, which SE-0387
+    # allows whenever one installed SDK supports the triple, as is the case here.
+    - name: Install the Swift SDK
+      if: inputs.swift-sdk != ''
+      shell: bash
+      run: |
+        swift sdk install "${{ inputs.artifact-url }}" --checksum "${{ inputs.artifact-sha256 }}"
+        echo "SWIFT_SDK=${{ inputs.swift-sdk }}" >> "$GITHUB_ENV"
+
+    # The Android SDK ships a script that links the runner's NDK into it; where the SDK was put
+    # depends on the swiftly setup, so the script is found rather than named.
+    - name: Link the Android NDK into the Swift SDK
+      if: inputs.android == 'true'
+      shell: bash
+      run: |
+        setup="$(find -L "$HOME/.swiftpm" "$HOME/.config/swiftpm" -name setup-android-sdk.sh -print -quit 2>/dev/null || true)"
+        "$setup"
+        echo "ANDROID_SWIFT_SDK=$(dirname "$(dirname "$setup")")" >> "$GITHUB_ENV"
+
+    - shell: bash
+      run: swift --version
