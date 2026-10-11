@@ -8,17 +8,24 @@
 #      --argjson configurations "$CONFIGURATIONS" -f matrix.jq catalog.json
 #
 # `swift` is an array of minors. `targets` is an array whose entries are either a triple or an
-# object with a `triple` key and qualifiers. Four qualifiers are read here: `swift` restricts
+# object with a `triple` key and qualifiers. Five qualifiers are read here: `swift` restricts
 # the row to the minors it lists, `configurations` to the configurations it names, `runner`
-# overrides the catalog's, and `runtime` pins a simulator row to an OS release ("16.4"), which
-# names the CoreSimulator runtime to look for and the platform download that fetches it. Every
-# other qualifier is passed into the row unchanged, which is how a package marks a row
-# `experimental`, gives it a `sanitize`, or attaches anything else its own steps read.
+# overrides the catalog's, `runtime` pins a simulator row to an OS release ("16.4"), which
+# names the CoreSimulator runtime to look for and the platform download that fetches it, and
+# `flags` is joined with the configuration's, below. Every other qualifier is passed into the
+# row unchanged, which is how a package marks a row `experimental`, gives it a `sanitize`, or
+# attaches anything else its own steps read.
 #
 # `configurations` is an array whose entries are either a name or an object with a `name` key
 # and qualifiers, passed into the row the same way: `only` and `skip` are patterns over suite
 # type names that say which suites that configuration runs or leaves out, so that a suite
 # which only means something optimized can go to Release alone.
+#
+# `flags` is the one qualifier both a row and a configuration may carry: arguments for every
+# `swift build` and `swift test` in the row. A configuration's keys otherwise overwrite a row's,
+# but these are joined, the row's first, so that a configuration can turn something on for
+# every target and a target can answer it: a define that lengthens the tests in Release, and
+# another that shortens them again on a target that cannot afford them.
 #
 # Every row is emitted explicitly rather than as axes plus `include`, so nothing here depends
 # on how GitHub merges an `include` entry into an axis combination, and a triple the package
@@ -43,8 +50,10 @@ def labels:
       | $configurations[] as $configuration
       | select($row.configurations == null or ($row.configurations | index($configuration.name)))
       | ($target | del(.name, .host, .runner, .os, .artifact))
-        + ($row | del(.triple, .swift, .runtime, .configurations))
-        + ($configuration | del(.name))
+        + ($row | del(.triple, .swift, .runtime, .configurations, .flags))
+        + ($configuration | del(.name, .flags))
+        + ([$row.flags, $configuration.flags] | map(select(. != null))
+           | if length > 0 then { flags: join(" ") } else {} end)
         + (if $row.runtime
            then ($target.simulator_runtime // error("\($row.triple) has no simulator runtime to pin"))
                 | { simulator_runtime: "\(.)-\($row.runtime | gsub("\\."; "-"))",

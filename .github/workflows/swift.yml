@@ -1,0 +1,201 @@
+# Builds a package through SwiftPM under every Swift minor it supports, on every target triple
+# it lists, in every build configuration it names, and runs its tests wherever the row can:
+# natively on the host, through the WasmKit the toolchain ships for WebAssembly, and over adb
+# on an emulator for Android. A caller looks like:
+#
+#   jobs:
+#     swift:
+#       uses: sinoru/github-workflows/.github/workflows/swift.yml@main
+#       with:
+#         swift: '["6.3", "6.4"]'
+#         targets: '["arm64-apple-macosx", "x86_64-unknown-linux-gnu", "x86_64-unknown-windows-msvc"]'
+#         configurations: '["Debug", "Release"]'
+#
+# The Xcode build system takes a different path through the same manifest, so a package's
+# Apple platform coverage goes through apple-platforms.yml; macOS appears in both on purpose.
+#
+# A row may carry qualifiers the build reads: `sanitize` builds it under that sanitizer,
+# `experimental` lets it fail without failing the run, and `flags` are arguments for every
+# `swift build` and `swift test` in it. A configuration may carry `only` and `skip`, patterns
+# over suite type names, for a suite that should run in one configuration and not another,
+# and `flags` of its own, joined with the row's. The catalog marks the rows that can only
+# build (`skip_tests`), that cross-compile through a Swift SDK, and that run on Android.
+
+name: Swift
+
+on:
+  workflow_call:
+    inputs:
+      swift:
+        description: JSON array of Swift minors, e.g. '["6.3", "6.4"]'.
+        type: string
+        required: true
+      targets:
+        description: JSON array of target triples, with qualifiers where a row needs them.
+        type: string
+        required: true
+      configurations:
+        description: >-
+          JSON array of build configurations, with `only` and `skip` suite patterns where a
+          configuration needs them. Debug is where `@testable import` works and what
+          `swift test` runs, so it is the default; a library whose clients ship it adds
+          Release.
+        type: string
+        default: '["Debug"]'
+      test-options:
+        description: >-
+          Further arguments for building and running the tests, on every row: `--disable-xctest`
+          for a package whose tests are Swift Testing alone, since the corelibs runner traps on
+          an empty list rather than reporting none. An Android row runs Swift Testing alone, and
+          refuses to run without it rather than pass an XCTest suite it never ran.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    uses: sinoru/github-workflows/.github/workflows/matrix.yml@main
+    with:
+      swift: ${{ inputs.swift }}
+      targets: ${{ inputs.targets }}
+      configurations: ${{ inputs.configurations }}
+
+  build:
+    needs: matrix
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    # A row the package marks `experimental` may fail without failing the run; the package says
+    # why beside the row. `|| false` because an unset matrix key is null, not a boolean.
+    continue-on-error: ${{ matrix.experimental || false }}
+    # Nothing here should take an hour; the alternative backstop is GitHub's 360-minute default,
+    # which a test that stops rather than fails would otherwise run out.
+    timeout-minutes: 60
+    # SwiftPM spells its configurations in lowercase and has the two. ASAN_OPTIONS turns off the
+    # leak checker that comes with AddressSanitizer on Linux: what it reports is XCTest's own,
+    # what a test binary holds until it exits, in stacks that differ by toolchain and by
+    # architecture, and Apple's platforms do not run the checker unless asked, so the rows
+    # behave alike. The row's own test options come after the caller's.
+    env:
+      CONFIGURATION: ${{ matrix.configuration == 'Release' && 'release' || 'debug' }}
+      SANITIZE: ${{ matrix.sanitize }}
+      ASAN_OPTIONS: ${{ matrix.sanitize == 'address' && 'detect_leaks=0' || '' }}
+      FLAGS: ${{ matrix.flags }}
+      TEST_OPTIONS: ${{ inputs.test-options }} ${{ matrix.test_options }}
+      ONLY: ${{ matrix.only }}
+      SKIP: ${{ matrix.skip }}
+      TRIPLE: ${{ matrix.triple }}
+      ANDROID: ${{ matrix.android }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    # Verbose output is gated on RUNNER_DEBUG throughout: it is only present when a run has step
+    # debug logging enabled, and then holds "1". Ordinary runs stay terse; re-running the same
+    # commit in debug mode brings the detail back without editing the workflow.
+    #
+    # `shell: bash` on every run step, for the parameter expansions: a Windows runner defaults
+    # to PowerShell, and its Git Bash is what runs these there.
+    steps:
+      - uses: actions/checkout@v7
+
+      # Exports SWIFT_SDK for a cross-compiling row, and ANDROID_SWIFT_SDK for an Android one,
+      # which the steps below read.
+      - uses: sinoru/github-workflows/actions/setup-swift@main
+        with:
+          version: ${{ matrix.patch }}
+          developer-dir: ${{ matrix.developer_dir }}
+          artifact-url: ${{ matrix.artifact_url }}
+          artifact-sha256: ${{ matrix.artifact_sha256 }}
+          swift-sdk: ${{ matrix.swift_sdk && matrix.triple || '' }}
+          android: ${{ matrix.android || false }}
+
+      # The shipping build on its own, so that a library that does not compile for a platform
+      # fails under this name and not under a test build's. What the test build is given is
+      # kept for the step that runs it, since the products are only found again under the
+      # flags that made them.
+      - name: swift build
+        shell: bash
+        run: |
+          build_flags="-c $CONFIGURATION${SWIFT_SDK:+ --swift-sdk $SWIFT_SDK}${SANITIZE:+ --sanitize $SANITIZE} $FLAGS"
+          echo "test_flags=$build_flags $TEST_OPTIONS" >> "$GITHUB_ENV"
+          swift build ${RUNNER_DEBUG:+-v} $build_flags
+
+      # The tests' build, apart from running them. A row that cannot run its tests as the
+      # others do still builds them, and test code that does not compile for a platform fails
+      # under this name rather than under the run's. A row the catalog marks `skip_tests` stops
+      # at the build above: the static Linux SDK ships no testing library, and nothing hosted
+      # can run an arm64 Android binary.
+      - name: swift build --build-tests
+        if: ${{ !matrix.skip_tests }}
+        shell: bash
+        run: swift build --build-tests ${RUNNER_DEBUG:+-v} $test_flags
+
+      - uses: sinoru/github-workflows/actions/setup-android-emulator@main
+        if: ${{ matrix.android && !matrix.skip_tests }}
+        with:
+          triple: ${{ matrix.triple }}
+
+      # `swift test` builds for `@testable` in either configuration unless told otherwise, and
+      # then looks for products the Release build never made; `--disable-testable-imports` is
+      # Release's alone for that reason, and makes Release the library as a client gets it.
+      #
+      # The WebAssembly row runs as the rest do: SwiftPM knows to hand a wasm bundle to WasmKit,
+      # which is on the toolchain's path. Android has no such hand-off, so its branch does what
+      # `swift test --skip-build` would, by hand: stage the bundle with every shared library it
+      # loads, the Swift runtime from the SDK and libc++ from the NDK, push the lot, and run it
+      # over adb, which hands back the exit status. Once per runner: Swift 6.3 builds a single
+      # bundle for the package, where 6.4's build system builds a runner for each test target.
+      # Named one at a time: a glob on one line runs the first runner with the rest as its
+      # arguments. A runner for one target may hold no suite the selection names, and Swift
+      # Testing says so by exiting `EX_UNAVAILABLE`, 69, which is not a failure; `swift test`
+      # makes the same allowance on the other rows.
+      #
+      # Swift Testing alone on Android: the corelibs XCTest runner takes test names, not the
+      # patterns `only` and `skip` are, and the translation is `swift test`'s, which has no part
+      # in this branch. A package that has not turned XCTest off is refused rather than passed
+      # with an XCTest suite that never ran. The selection is a pattern, so it is quoted on
+      # both sides: kept whole for the host, and escaped again for the shell on the device.
+      - name: swift test
+        if: ${{ !matrix.skip_tests }}
+        shell: bash
+        run: |
+          selection=()
+          if [ -n "$ONLY" ]; then selection+=(--filter "$ONLY"); fi
+          if [ -n "$SKIP" ]; then selection+=(--skip "$SKIP"); fi
+          testable=""
+          if [ "$CONFIGURATION" = release ]; then testable="--disable-testable-imports"; fi
+
+          if [ -z "$ANDROID" ]; then
+            swift test --skip-build ${RUNNER_DEBUG:+-v} $test_flags $testable "${selection[@]}"
+            exit $?
+          fi
+
+          case " $TEST_OPTIONS " in
+            *" --disable-xctest "*) ;;
+            *) echo "An Android row runs Swift Testing alone; pass --disable-xctest in test-options, or leave the row out." >&2
+               exit 1 ;;
+          esac
+
+          arch="${TRIPLE%%-*}" staging="$RUNNER_TEMP/android-tests" device="/data/local/tmp/tests"
+          bin="$(swift build --show-bin-path $test_flags)"
+          mkdir -p "$staging"
+          find "$bin" -maxdepth 1 \( -name '*.xctest' -o -name '*-test-runner' -o -name '*.so' -o -name '*.resources' \) -exec cp -a {} "$staging" \;
+          cp -a "$ANDROID_SWIFT_SDK/swift-resources/usr/lib/swift-$arch/android/"*.so "$staging"
+          cp -aL "$ANDROID_SWIFT_SDK/ndk-sysroot/usr/lib/$arch-linux-android/libc++_shared.so" "$staging"
+          adb push "$staging" "$device"
+
+          remote_selection=""
+          if [ ${#selection[@]} -gt 0 ]; then remote_selection=$(printf ' %q' "${selection[@]}"); fi
+          runners=("$staging"/*-test-runner)
+          if [ ! -e "${runners[0]}" ]; then runners=("$staging"/*.xctest); fi
+          if [ ! -e "${runners[0]}" ]; then echo "No test runner was built." >&2; exit 1; fi
+          status=0
+          for runner in "${runners[@]}"; do
+            echo "$(basename "$runner")"
+            adb shell "cd $device && ./$(basename "$runner") --testing-library swift-testing$remote_selection" || {
+              code=$?
+              if [ $code -ne 69 ]; then status=1; fi
+            }
+          done
+          exit $status
