@@ -21,8 +21,8 @@ inputs:
     default: ""
   swift-sdk:
     description: >-
-      The target triple of a Swift SDK to install from the artifact, exported as SWIFT_SDK for
-      the steps that follow. Empty for none.
+      The Swift SDK to install from the artifact, as the name `--swift-sdk` takes, exported as
+      SWIFT_SDK for the steps that follow. Empty for none.
     default: ""
   android:
     description: Whether the Swift SDK targets Android, which needs the NDK linked into it.
@@ -99,8 +99,9 @@ runs:
           throw "The installer finished without putting the toolchain on the path."
         }
 
-    # The SDK is named to the build steps by its triple rather than its bundle id, which SE-0387
-    # allows whenever one installed SDK supports the triple, as is the case here.
+    # The SDK is named to the build steps as the catalog names it: by its triple where the bundle
+    # holds one SDK for the triple, which SE-0387 allows, and by its id where the bundle holds
+    # several, as the WebAssembly bundle does with its regular and Embedded SDKs.
     - name: Install the Swift SDK
       if: inputs.swift-sdk != ''
       shell: bash

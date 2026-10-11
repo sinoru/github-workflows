@@ -107,7 +107,7 @@ jobs:
           developer-dir: ${{ matrix.developer_dir }}
           artifact-url: ${{ matrix.artifact_url }}
           artifact-sha256: ${{ matrix.artifact_sha256 }}
-          swift-sdk: ${{ matrix.swift_sdk && matrix.triple || '' }}
+          swift-sdk: ${{ matrix.swift_sdk }}
           android: ${{ matrix.android || false }}
 
       # The shipping build on its own, so that a library that does not compile for a platform

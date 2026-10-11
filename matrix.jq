@@ -4,6 +4,16 @@
 # Xcode, the triple's runner and display name, and the installer or Swift SDK it needs along
 # with the checksum of that artifact for that patch.
 #
+# A Swift SDK is named to the build steps the way the catalog says: by the triple, where the
+# bundle holds one SDK for it, or by an id template where it holds several. The WebAssembly
+# bundle ships a regular and an Embedded SDK for one triple, and SwiftPM picks between them
+# arbitrarily when given the triple, so its targets name the id: `{tag}_wasm`, where the tag is
+# the toolchain's, `swift-6.3.3-RELEASE` for a release and `swift-DEVELOPMENT-SNAPSHOT-…` for a
+# snapshot, which is how swift-sdk-generator names what it puts in a bundle. A release derives
+# its tag from its patch; a snapshot entry in the catalog would carry one. The value is read
+# after the row and the configuration have had their say, so a package can name another SDK
+# from the same bundle, `{tag}_wasm-embedded`, or set `false` to build with none.
+#
 #   jq -c --argjson swift "$SWIFT" --argjson targets "$TARGETS" \
 #      --argjson configurations "$CONFIGURATIONS" -f matrix.jq catalog.json
 #
@@ -42,6 +52,7 @@ def labels:
 | { include: [
       $swift[] as $minor
       | ($catalog.swift[$minor] // error("Swift \($minor) is not in the catalog")) as $toolchain
+      | ($toolchain.tag // "swift-\($toolchain.patch)-RELEASE") as $tag
       | $rows[]
       | select(.swift == null or (.swift | index($minor)))
       | . as $row
@@ -73,6 +84,10 @@ def labels:
                   artifact_sha256: ($artifact.sha256[$toolchain.patch]
                     // error("no checksum for \($target.artifact) \($toolchain.patch)")) }
            else {} end)
+      | if .swift_sdk == true then .swift_sdk = .triple
+        elif (.swift_sdk | type) == "string"
+        then .swift_sdk |= (gsub("\\{tag\\}"; $tag) | gsub("\\{patch\\}"; $toolchain.patch))
+        else del(.swift_sdk) end
       | . + { name: ((if $row.runtime then ($target.name | sub(" "; " \($row.runtime) ")) else $target.name end)
                      + " · Swift \($minor)"
                      + " · \($configuration.name)"
