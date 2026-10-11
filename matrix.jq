@@ -1,22 +1,28 @@
 # Expands a package's short matrix spec into the full `include` list a build job can take whole
-# through `fromJSON`. The spec says which Swift minors and which target triples; the catalog
-# says what each of those stands for: the minor's current patch and Xcode, the triple's runner
-# and display name, and the installer or Swift SDK it needs along with the checksum of that
-# artifact for that patch.
+# through `fromJSON`. The spec says which Swift minors, which target triples and which build
+# configurations; the catalog says what the first two stand for: the minor's current patch and
+# Xcode, the triple's runner and display name, and the installer or Swift SDK it needs along
+# with the checksum of that artifact for that patch.
 #
-#   jq -c --argjson swift "$SWIFT" --argjson targets "$TARGETS" -f matrix.jq catalog.json
+#   jq -c --argjson swift "$SWIFT" --argjson targets "$TARGETS" \
+#      --argjson configurations "$CONFIGURATIONS" -f matrix.jq catalog.json
 #
 # `swift` is an array of minors. `targets` is an array whose entries are either a triple or an
-# object with a `triple` key and qualifiers. Three qualifiers are read here: `swift` restricts
-# the row to the minors it lists, `runner` overrides the catalog's, and `runtime` pins a
-# simulator row to an OS release ("16.4"), which names the CoreSimulator runtime to look for
-# and the platform download that fetches it. Every other qualifier is passed into the row
-# unchanged, which is how a package marks a row `experimental`, gives it a `sanitize`, or
-# attaches anything else its own steps read.
+# object with a `triple` key and qualifiers. Four qualifiers are read here: `swift` restricts
+# the row to the minors it lists, `configurations` to the configurations it names, `runner`
+# overrides the catalog's, and `runtime` pins a simulator row to an OS release ("16.4"), which
+# names the CoreSimulator runtime to look for and the platform download that fetches it. Every
+# other qualifier is passed into the row unchanged, which is how a package marks a row
+# `experimental`, gives it a `sanitize`, or attaches anything else its own steps read.
+#
+# `configurations` is an array whose entries are either a name or an object with a `name` key
+# and qualifiers, passed into the row the same way: `only` and `skip` are patterns over suite
+# type names that say which suites that configuration runs or leaves out, so that a suite
+# which only means something optimized can go to Release alone.
 #
 # Every row is emitted explicitly rather than as axes plus `include`, so nothing here depends
-# on how GitHub merges an `include` entry into an axis combination, and a pair the package does
-# not want is simply never emitted.
+# on how GitHub merges an `include` entry into an axis combination, and a triple the package
+# does not want is simply never emitted.
 
 def labels:
   [ (if .sanitize == "thread" then "TSan" elif .sanitize == "address" then "ASan" else empty end),
@@ -25,6 +31,7 @@ def labels:
 
 . as $catalog
 | ($targets | map(if type == "string" then { triple: . } else . end)) as $rows
+| ($configurations | map(if type == "string" then { name: . } else . end)) as $configurations
 | { include: [
       $swift[] as $minor
       | ($catalog.swift[$minor] // error("Swift \($minor) is not in the catalog")) as $toolchain
@@ -33,8 +40,11 @@ def labels:
       | . as $row
       | ($catalog.targets[$row.triple] // error("\($row.triple) is not in the catalog")) as $target
       | (if $target.artifact then $catalog.artifacts[$target.artifact] else null end) as $artifact
+      | $configurations[] as $configuration
+      | select($row.configurations == null or ($row.configurations | index($configuration.name)))
       | ($target | del(.name, .host, .runner, .os, .artifact))
-        + ($row | del(.triple, .swift, .runtime))
+        + ($row | del(.triple, .swift, .runtime, .configurations))
+        + ($configuration | del(.name))
         + (if $row.runtime
            then ($target.simulator_runtime // error("\($row.triple) has no simulator runtime to pin"))
                 | { simulator_runtime: "\(.)-\($row.runtime | gsub("\\."; "-"))",
@@ -43,6 +53,7 @@ def labels:
         + { triple: $row.triple,
             swift: $minor,
             patch: $toolchain.patch,
+            configuration: $configuration.name,
             runner: ($row.runner // $target.runner // $toolchain.macos_runner),
             os: ($target.os // $toolchain.macos) }
         + (if $target.host == "macos"
@@ -55,5 +66,6 @@ def labels:
            else {} end)
       | . + { name: ((if $row.runtime then ($target.name | sub(" "; " \($row.runtime) ")) else $target.name end)
                      + " · Swift \($minor)"
+                     + " · \($configuration.name)"
                      + (labels | if length > 0 then " (\(join(", ")))" else "" end)) }
   ] }

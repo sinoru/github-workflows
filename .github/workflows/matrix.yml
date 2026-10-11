@@ -1,6 +1,7 @@
 # Expands a package's short matrix spec into the full `include` list its build job takes whole
-# through `fromJSON`. The spec says which Swift minors and which target triples; catalog.json
-# says what each stands for, and matrix.jq joins the two. A caller looks like:
+# through `fromJSON`. The spec says which Swift minors, which target triples and which build
+# configurations; catalog.json says what each of the first two stands for, and matrix.jq
+# crosses the three. A caller looks like:
 #
 #   jobs:
 #     matrix:
@@ -8,6 +9,7 @@
 #       with:
 #         swift: '["6.3", "6.4"]'
 #         targets: '["arm64-apple-macosx", "x86_64-unknown-linux-gnu"]'
+#         configurations: '["Debug", "Release"]'
 #     build:
 #       needs: matrix
 #       strategy:
@@ -26,10 +28,19 @@ on:
       targets:
         description: >-
           JSON array of target triples. An entry is a string, or an object with a `triple` key
-          and qualifiers; `swift` limits the row to those minors and every other key is passed
-          through into the row.
+          and qualifiers; `swift` and `configurations` limit the row to those, and every other
+          key is passed through into the row.
         type: string
         required: true
+      configurations:
+        description: >-
+          JSON array of build configurations. An entry is a string, or an object with a `name`
+          key and qualifiers passed through into the row; `only` and `skip` are patterns over
+          suite type names saying which suites that configuration runs or leaves out. Debug is
+          where `@testable import` works and what `swift test` runs, so it is the default; a
+          library whose clients ship it adds Release.
+        type: string
+        default: '["Debug"]'
     outputs:
       matrix:
         description: >-
@@ -58,7 +69,9 @@ jobs:
         env:
           SWIFT: ${{ inputs.swift }}
           TARGETS: ${{ inputs.targets }}
+          CONFIGURATIONS: ${{ inputs.configurations }}
         run: |
-          matrix=$(jq -c --argjson swift "$SWIFT" --argjson targets "$TARGETS" -f matrix.jq catalog.json)
+          matrix=$(jq -c --argjson swift "$SWIFT" --argjson targets "$TARGETS" \
+            --argjson configurations "$CONFIGURATIONS" -f matrix.jq catalog.json)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           jq . <<< "$matrix"

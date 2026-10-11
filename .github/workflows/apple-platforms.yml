@@ -1,7 +1,7 @@
 # Builds a package for the Apple platforms it names, through the Xcode build system, and runs
-# its tests wherever a runner can boot the destination. Two axes, crossed: every Swift minor the
-# package supports, which moves the platform SDKs along with the compiler, under every target
-# triple it lists. A caller looks like:
+# its tests wherever a runner can boot the destination. Three axes, crossed: every Swift minor
+# the package supports, which moves the platform SDKs along with the compiler, under every
+# target triple it lists, in every build configuration it names. A caller looks like:
 #
 #   jobs:
 #     apple-platforms:
@@ -10,12 +10,15 @@
 #         scheme: MyPackage
 #         swift: '["6.3", "6.4"]'
 #         targets: '["arm64-apple-macosx", "arm64-apple-ios", "arm64-apple-ios-simulator"]'
+#         configurations: '["Debug", "Release"]'
 #
 # Device and simulator are separate SDKs and target triples, so they fail independently. A
 # device row has nothing to run its tests on, so it stops after the build. A row may carry
 # qualifiers the build reads: `runtime` pins a simulator row to an OS release the image does
 # not carry; `scheme` and `arguments` build and test that row through another scheme, e.g. a
-# host app in a project, for tests that cannot run in the bare xctest runner.
+# host app in a project, for tests that cannot run in the bare xctest runner. A configuration
+# may carry `only` and `skip`, patterns over suite type names, for a suite that should run in
+# one configuration and not another.
 
 name: Apple Platforms
 
@@ -36,16 +39,12 @@ on:
         required: true
       configurations:
         description: >-
-          Space-separated configurations to build and test. Release is the library as a client
-          gets it, so it is only left out where the tests cannot be built without testability.
+          JSON array of build configurations, with `only` and `skip` suite patterns where a
+          configuration needs them. Debug is where `@testable import` works and what
+          `swift test` runs, so it is the default; a library whose clients ship it adds
+          Release, which builds its tests only when they need no testability.
         type: string
-        default: Debug Release
-      release-only-suites:
-        description: >-
-          A pattern over suite type names. Suites it matches run in Release only and every
-          other suite in the other configurations only.
-        type: string
-        default: ""
+        default: '["Debug"]'
 
 permissions:
   contents: read
@@ -56,6 +55,7 @@ jobs:
     with:
       swift: ${{ inputs.swift }}
       targets: ${{ inputs.targets }}
+      configurations: ${{ inputs.configurations }}
 
   build:
     needs: matrix
@@ -77,8 +77,9 @@ jobs:
         with:
           scheme: ${{ matrix.scheme || inputs.scheme }}
           arguments: ${{ matrix.arguments }}
-          configurations: ${{ inputs.configurations }}
-          release-only-suites: ${{ inputs.release-only-suites }}
+          configuration: ${{ matrix.configuration }}
+          only-testing: ${{ matrix.only }}
+          skip-testing: ${{ matrix.skip }}
           destination: ${{ matrix.destination }}
           test-destination: ${{ matrix.test_destination }}
           simulator-runtime: ${{ matrix.simulator_runtime }}

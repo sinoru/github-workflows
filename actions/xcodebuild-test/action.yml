@@ -1,6 +1,6 @@
 name: Build and test with xcodebuild
 description: >-
-  Builds a scheme and its tests for a generic destination, in each configuration named, then
+  Builds a scheme and its tests for a generic destination, in the configuration named, then
   runs the tests wherever a destination can be launched: the one given directly, or a simulator
   device found in the runtime named. A row that names neither stops after the build.
 
@@ -13,13 +13,15 @@ inputs:
       Further xcodebuild arguments, e.g. a `-project` and signing overrides for a scheme that
       lives in a project rather than the package.
     default: ""
-  configurations:
-    description: Space-separated configurations to build and test, e.g. "Debug Release".
-    default: Debug Release
-  release-only-suites:
+  configuration:
+    description: The configuration to build and test, e.g. "Release".
+    default: Debug
+  only-testing:
     description: >-
-      A pattern over suite type names. Suites it matches run in Release only and every other
-      suite in the other configurations only, so each test runs in exactly one.
+      A pattern over suite type names. Only the suites it matches run; empty runs them all.
+    default: ""
+  skip-testing:
+    description: A pattern over suite type names. The suites it matches do not run.
     default: ""
   destination:
     description: The generic destination to build for, e.g. "generic/platform=iOS Simulator".
@@ -45,8 +47,7 @@ runs:
   steps:
     # build-for-testing rather than build: it compiles the test targets as well, and a generic
     # destination covers every architecture its SDK supports where the concrete one the run
-    # below needs does not. Every configuration names the same derived data, where Xcode keeps
-    # their products apart, and the run reuses what was built here. The configuration is stated
+    # below needs does not. The run reuses what was built here. The configuration is stated
     # rather than left to the scheme: nothing commits a scheme, so the one SwiftPM generates
     # would default both actions to Debug.
     - name: xcodebuild build-for-testing
@@ -54,18 +55,14 @@ runs:
       env:
         SCHEME: ${{ inputs.scheme }}
         ARGUMENTS: ${{ inputs.arguments }}
-        CONFIGURATIONS: ${{ inputs.configurations }}
+        CONFIGURATION: ${{ inputs.configuration }}
         DESTINATION: ${{ inputs.destination }}
       run: |
-        for configuration in $CONFIGURATIONS; do
-          echo "::group::$configuration"
-          xcodebuild build-for-testing \
-            -scheme "$SCHEME" $ARGUMENTS \
-            -destination "$DESTINATION" \
-            -configuration "$configuration" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData"
-          echo "::endgroup::"
-        done
+        xcodebuild build-for-testing \
+          -scheme "$SCHEME" $ARGUMENTS \
+          -destination "$DESTINATION" \
+          -configuration "$CONFIGURATION" \
+          -derivedDataPath "$RUNNER_TEMP/DerivedData"
 
     - uses: sinoru/github-workflows/actions/resolve-xcode-destination@main
       with:
@@ -75,48 +72,39 @@ runs:
         download-platform: ${{ inputs.download-platform }}
         download-version: ${{ inputs.download-version }}
 
-    # Every configuration runs even when an earlier one fails, so that one run says which of
-    # them is broken; the step fails at the end, having shown all.
-    #
-    # xcodebuild selects tests by `Target/Type` and takes no pattern, so the release-only
-    # pattern is matched against the test sources and each type it finds is named under the
-    # directory it is in, which is its target. A list written out would be one more thing to
-    # forget when a suite is added.
+    # xcodebuild selects tests by `Target/Type` and takes no pattern, so a pattern is matched
+    # against the test sources and each type it finds is named under the directory it is in,
+    # which is its target. A list written out would be one more thing to forget when a suite
+    # is added. A pattern that matches nothing is a mistake, not an empty selection, and fails
+    # here rather than quietly running everything or nothing.
     - name: xcodebuild test-without-building
       shell: bash
       env:
         SCHEME: ${{ inputs.scheme }}
         ARGUMENTS: ${{ inputs.arguments }}
-        CONFIGURATIONS: ${{ inputs.configurations }}
-        SUITES: ${{ inputs.release-only-suites }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        ONLY: ${{ inputs.only-testing }}
+        SKIP: ${{ inputs.skip-testing }}
       run: |
         if [ -z "$TEST_DESTINATION" ]; then
           echo "Nothing is attached to run these binaries on; the build is all this row does."
           exit 0
         fi
 
-        suites=""
-        if [ -n "$SUITES" ]; then
-          suites=$(grep -rEo "^(final )?(class|struct) [A-Za-z]+($SUITES)\b" Tests \
+        suites() {
+          local found
+          found=$(grep -rEo "^(final )?(class|struct) [A-Za-z]+($2)\b" Tests \
             | sed -E 's|^Tests/([^/]+)/[^:]+:.* ([A-Za-z]+)$|\1/\2|' | sort -u)
-          if [ -z "$suites" ]; then echo "No suite matches $SUITES." >&2; exit 1; fi
-        fi
+          if [ -z "$found" ]; then echo "No suite matches $2." >&2; return 1; fi
+          printf -- "$1:%s " $found
+        }
+        selection=""
+        if [ -n "$ONLY" ]; then selection+=$(suites -only-testing "$ONLY") || exit 1; fi
+        if [ -n "$SKIP" ]; then selection+=$(suites -skip-testing "$SKIP") || exit 1; fi
 
-        status=0
-        for configuration in $CONFIGURATIONS; do
-          echo "::group::$configuration"
-          selection=""
-          if [ -n "$suites" ]; then
-            flag="-skip-testing"
-            if [ "$configuration" = Release ]; then flag="-only-testing"; fi
-            selection=$(printf -- "$flag:%s " $suites)
-          fi
-          xcodebuild test-without-building \
-            -scheme "$SCHEME" $ARGUMENTS \
-            -destination "$TEST_DESTINATION" \
-            -configuration "$configuration" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            $selection || status=1
-          echo "::endgroup::"
-        done
-        exit $status
+        xcodebuild test-without-building \
+          -scheme "$SCHEME" $ARGUMENTS \
+          -destination "$TEST_DESTINATION" \
+          -configuration "$CONFIGURATION" \
+          -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+          $selection
