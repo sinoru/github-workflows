@@ -148,7 +148,7 @@
       "os": "WebAssembly",
       "artifact": "wasm",
       "swift_sdk": "{tag}_wasm",
-      "test_options": "--disable-xctest"
+      "test_arguments": "--disable-xctest"
     },
     "x86_64-unknown-linux-android28": {
       "name": "Android API 28",

@@ -13,6 +13,9 @@ inputs:
       Further xcodebuild arguments, e.g. a `-project` and signing overrides for a scheme that
       lives in a project rather than the package.
     default: ""
+  test-run-arguments:
+    description: Further xcodebuild arguments for running the tests alone.
+    default: ""
   configuration:
     description: The configuration to build and test, e.g. "Release".
     default: Debug
@@ -82,6 +85,7 @@ runs:
       env:
         SCHEME: ${{ inputs.scheme }}
         ARGUMENTS: ${{ inputs.arguments }}
+        TEST_RUN_ARGUMENTS: ${{ inputs.test-run-arguments }}
         CONFIGURATION: ${{ inputs.configuration }}
         ONLY: ${{ inputs.only-testing }}
         SKIP: ${{ inputs.skip-testing }}
@@ -103,7 +107,7 @@ runs:
         if [ -n "$SKIP" ]; then selection+=$(suites -skip-testing "$SKIP") || exit 1; fi
 
         xcodebuild test-without-building \
-          -scheme "$SCHEME" $ARGUMENTS \
+          -scheme "$SCHEME" $ARGUMENTS $TEST_RUN_ARGUMENTS \
           -destination "$TEST_DESTINATION" \
           -configuration "$CONFIGURATION" \
           -derivedDataPath "$RUNNER_TEMP/DerivedData" \

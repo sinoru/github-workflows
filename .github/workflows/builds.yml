@@ -1,0 +1,132 @@
+# Builds a package through SwiftPM in the ways it names, under every Swift minor it supports and
+# on every target triple it lists, and runs nothing: what is checked is that each one compiles.
+# A package with traits uses this to show that every trait set a consumer can ask for still
+# builds, and that the umbrella pulls in only what the set says; one that keeps its default
+# trait set lean uses it to show that the tests still compile there, with the tests of what
+# the set leaves out behind their `#if`. A caller looks like:
+#
+#   jobs:
+#     builds:
+#       uses: sinoru/github-workflows/.github/workflows/builds.yml@main
+#       with:
+#         swift: '["6.3", "6.4"]'
+#         targets: '["arm64-apple-macosx", "x86_64-unknown-linux-gnu"]'
+#         builds: |
+#           [
+#             "--target PropertyList --traits Value",
+#             "--target PropertyList --disable-default-traits",
+#             "--build-tests"
+#           ]
+#
+# `--target` is what makes a trait build mean anything: a trait decides what the umbrella
+# depends on, not what the package contains, and a bare `swift build` compiles every target in
+# the package whatever the traits say, so it would stay green with a dependency spelled
+# unconditionally.
+#
+# Every build is a row of its own, on a runner of its own, and that is not only for the name
+# and the separate failure. A build directory shared between trait sets keeps the modules the
+# earlier set built, and the compiler finds them: an umbrella importing a sibling without the
+# trait's `#if` built clean under `--disable-default-traits` in a directory a default build had
+# used, and failed only in a fresh one. The row's toolchain, Swift SDK and `arguments` apply to
+# every build, and its `test_arguments` to a build naming `--build-tests`; a row the catalog
+# marks `skip_tests` has no testing library, so such a build is not crossed with it.
+
+name: Builds
+
+on:
+  workflow_call:
+    inputs:
+      swift:
+        description: JSON array of Swift minors, e.g. '["6.3", "6.4"]'.
+        type: string
+        required: true
+      targets:
+        description: JSON array of target triples, with qualifiers where a row needs them.
+        type: string
+        required: true
+      configurations:
+        description: >-
+          JSON array of build configurations. Debug is the default; a build that is only worth
+          checking optimized names Release.
+        type: string
+        default: '["Debug"]'
+      builds:
+        description: >-
+          JSON array of the builds, each the arguments one `swift build` takes after the row's
+          own.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    uses: sinoru/github-workflows/.github/workflows/matrix.yml@main
+    with:
+      swift: ${{ inputs.swift }}
+      targets: ${{ inputs.targets }}
+      configurations: ${{ inputs.configurations }}
+
+  # Crosses the rows with the builds, so that each build is a row. A list that crosses to
+  # nothing fails here, by name, rather than as an empty matrix downstream.
+  builds:
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.cross.outputs.matrix }}
+    steps:
+      - id: cross
+        env:
+          MATRIX: ${{ needs.matrix.outputs.matrix }}
+          BUILDS: ${{ inputs.builds }}
+        run: |
+          matrix=$(jq -c --argjson builds "$BUILDS" '
+            .include |= [ .[] as $row
+              | $builds[]
+              | select(($row.skip_tests | not) or ((" \(.) " | contains(" --build-tests ")) | not))
+              | $row + { build: ., name: "\($row.name) · \(.)" } ]' <<< "$MATRIX")
+          jq -e '.include | length > 0' <<< "$matrix" > /dev/null || { echo "No builds to run." >&2; exit 1; }
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          jq . <<< "$matrix"
+
+  build:
+    needs: builds
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    timeout-minutes: 60
+    env:
+      CONFIGURATION: ${{ matrix.configuration == 'Release' && 'release' || 'debug' }}
+      SANITIZE: ${{ matrix.sanitize }}
+      ARGUMENTS: ${{ matrix.arguments }}
+      TEST_ARGUMENTS: ${{ matrix.test_arguments }}
+      BUILD: ${{ matrix.build }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.builds.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: sinoru/github-workflows/actions/setup-swift@main
+        with:
+          version: ${{ matrix.patch }}
+          developer-dir: ${{ matrix.developer_dir }}
+          artifact-url: ${{ matrix.artifact_url }}
+          artifact-sha256: ${{ matrix.artifact_sha256 }}
+          swift-sdk: ${{ matrix.swift_sdk }}
+          android: ${{ matrix.android || false }}
+
+      # A build of the tests takes the test arguments the catalog and the row give, as the test
+      # build in the swift workflow does.
+      - name: swift build
+        shell: bash
+        run: |
+          test_arguments=""
+          case " $BUILD " in
+            *" --build-tests "*) test_arguments="$TEST_ARGUMENTS" ;;
+          esac
+          swift build ${RUNNER_DEBUG:+-v} -c "$CONFIGURATION" \
+            ${SWIFT_SDK:+--swift-sdk "$SWIFT_SDK"} ${SANITIZE:+--sanitize "$SANITIZE"} \
+            $ARGUMENTS $BUILD $test_arguments

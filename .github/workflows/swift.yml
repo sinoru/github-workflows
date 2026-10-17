@@ -15,11 +15,13 @@
 # Apple platform coverage goes through apple-platforms.yml; macOS appears in both on purpose.
 #
 # A row may carry qualifiers the build reads: `sanitize` builds it under that sanitizer,
-# `experimental` lets it fail without failing the run, and `flags` are arguments for every
-# `swift build` and `swift test` in it. A configuration may carry `only` and `skip`, patterns
-# over suite type names, for a suite that should run in one configuration and not another,
-# and `flags` of its own, joined with the row's. The catalog marks the rows that can only
-# build (`skip_tests`), that cross-compile through a Swift SDK, and that run on Android.
+# `experimental` lets it fail without failing the run, and three kinds of arguments, told
+# apart by how far they reach: `arguments` go to every `swift build` and `swift test` in the
+# row, `test_arguments` to the ones that build and run the tests, `test_run_arguments` to the
+# ones that run them. A configuration may carry `only` and `skip`, patterns over suite type
+# names, for a suite that should run in one configuration and not another, and arguments of
+# its own, joined with the row's. The catalog marks the rows that can only build
+# (`skip_tests`), that cross-compile through a Swift SDK, and that run on Android.
 
 name: Swift
 
@@ -42,7 +44,14 @@ on:
           Release.
         type: string
         default: '["Debug"]'
-      test-options:
+      target:
+        description: >-
+          The target the shipping build builds, for a package that cannot build whole on every
+          row: a test support target that imports Testing, say, where the static Linux SDK has
+          none. Empty builds everything, which is what a consumer resolving the package gets.
+        type: string
+        default: ''
+      test-arguments:
         description: >-
           Further arguments for building and running the tests, on every row: `--disable-xctest`
           for a package whose tests are Swift Testing alone, since the corelibs runner traps on
@@ -76,13 +85,15 @@ jobs:
     # leak checker that comes with AddressSanitizer on Linux: what it reports is XCTest's own,
     # what a test binary holds until it exits, in stacks that differ by toolchain and by
     # architecture, and Apple's platforms do not run the checker unless asked, so the rows
-    # behave alike. The row's own test options come after the caller's.
+    # behave alike. The row's own test arguments come after the caller's.
     env:
       CONFIGURATION: ${{ matrix.configuration == 'Release' && 'release' || 'debug' }}
+      TARGET: ${{ inputs.target }}
       SANITIZE: ${{ matrix.sanitize }}
       ASAN_OPTIONS: ${{ matrix.sanitize == 'address' && 'detect_leaks=0' || '' }}
-      FLAGS: ${{ matrix.flags }}
-      TEST_OPTIONS: ${{ inputs.test-options }} ${{ matrix.test_options }}
+      ARGUMENTS: ${{ matrix.arguments }}
+      TEST_ARGUMENTS: ${{ inputs.test-arguments }} ${{ matrix.test_arguments }}
+      TEST_RUN_ARGUMENTS: ${{ matrix.test_run_arguments }}
       ONLY: ${{ matrix.only }}
       SKIP: ${{ matrix.skip }}
       TRIPLE: ${{ matrix.triple }}
@@ -113,13 +124,13 @@ jobs:
       # The shipping build on its own, so that a library that does not compile for a platform
       # fails under this name and not under a test build's. What the test build is given is
       # kept for the step that runs it, since the products are only found again under the
-      # flags that made them.
+      # arguments that made them.
       - name: swift build
         shell: bash
         run: |
-          build_flags="-c $CONFIGURATION${SWIFT_SDK:+ --swift-sdk $SWIFT_SDK}${SANITIZE:+ --sanitize $SANITIZE} $FLAGS"
-          echo "test_flags=$build_flags $TEST_OPTIONS" >> "$GITHUB_ENV"
-          swift build ${RUNNER_DEBUG:+-v} $build_flags
+          build_flags="-c $CONFIGURATION${SWIFT_SDK:+ --swift-sdk $SWIFT_SDK}${SANITIZE:+ --sanitize $SANITIZE} $ARGUMENTS"
+          echo "test_flags=$build_flags $TEST_ARGUMENTS" >> "$GITHUB_ENV"
+          swift build ${RUNNER_DEBUG:+-v} ${TARGET:+--target "$TARGET"} $build_flags
 
       # The tests' build, apart from running them. A row that cannot run its tests as the
       # others do still builds them, and test code that does not compile for a platform fails
@@ -155,7 +166,8 @@ jobs:
       # patterns `only` and `skip` are, and the translation is `swift test`'s, which has no part
       # in this branch. A package that has not turned XCTest off is refused rather than passed
       # with an XCTest suite that never ran. The selection is a pattern, so it is quoted on
-      # both sides: kept whole for the host, and escaped again for the shell on the device.
+      # both sides: kept whole for the host, and escaped again for the shell on the device. The
+      # run arguments are the package's own words and go through as written.
       - name: swift test
         if: ${{ !matrix.skip_tests }}
         shell: bash
@@ -167,13 +179,13 @@ jobs:
           if [ "$CONFIGURATION" = release ]; then testable="--disable-testable-imports"; fi
 
           if [ -z "$ANDROID" ]; then
-            swift test --skip-build ${RUNNER_DEBUG:+-v} $test_flags $testable "${selection[@]}"
+            swift test --skip-build ${RUNNER_DEBUG:+-v} $test_flags $testable "${selection[@]}" $TEST_RUN_ARGUMENTS
             exit $?
           fi
 
-          case " $TEST_OPTIONS " in
+          case " $TEST_ARGUMENTS " in
             *" --disable-xctest "*) ;;
-            *) echo "An Android row runs Swift Testing alone; pass --disable-xctest in test-options, or leave the row out." >&2
+            *) echo "An Android row runs Swift Testing alone; pass --disable-xctest in test-arguments, or leave the row out." >&2
                exit 1 ;;
           esac
 
@@ -193,7 +205,7 @@ jobs:
           status=0
           for runner in "${runners[@]}"; do
             echo "$(basename "$runner")"
-            adb shell "cd $device && ./$(basename "$runner") --testing-library swift-testing$remote_selection" || {
+            adb shell "cd $device && ./$(basename "$runner") --testing-library swift-testing$remote_selection $TEST_RUN_ARGUMENTS" || {
               code=$?
               if [ $code -ne 69 ]; then status=1; fi
             }

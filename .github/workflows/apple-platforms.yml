@@ -16,9 +16,10 @@
 # device row has nothing to run its tests on, so it stops after the build. A row may carry
 # qualifiers the build reads: `runtime` pins a simulator row to an OS release the image does
 # not carry; `scheme` and `arguments` build and test that row through another scheme, e.g. a
-# host app in a project, for tests that cannot run in the bare xctest runner. A configuration
-# may carry `only` and `skip`, patterns over suite type names, for a suite that should run in
-# one configuration and not another.
+# host app in a project, for tests that cannot run in the bare xctest runner; and
+# `test_run_arguments` go to the test run alone. A configuration may carry `only` and `skip`,
+# patterns over suite type names, for a suite that should run in one configuration and not
+# another, and the two argument qualifiers, joined with the row's.
 
 name: Apple Platforms
 
@@ -77,6 +78,7 @@ jobs:
         with:
           scheme: ${{ matrix.scheme || inputs.scheme }}
           arguments: ${{ matrix.arguments }}
+          test-run-arguments: ${{ matrix.test_run_arguments }}
           configuration: ${{ matrix.configuration }}
           only-testing: ${{ matrix.only }}
           skip-testing: ${{ matrix.skip }}
